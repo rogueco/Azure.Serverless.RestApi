@@ -1,15 +1,15 @@
 using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Azure.Storage;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.AspNetCore.Http;
+using Newtonsoft.Json;
+using System.Threading.Tasks;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Azure.Cosmos.Table;
-using Newtonsoft.Json;
 using ServerlessRestApi.TodoFunction.Entities;
+using StorageException = Microsoft.Azure.Cosmos.Table.StorageException;
 
 namespace ServerlessRestApi.TodoFunction.Functions
 {
@@ -18,57 +18,53 @@ namespace ServerlessRestApi.TodoFunction.Functions
         [FunctionName("CreateTodo")]
         public static async Task<IActionResult> CreateTodo(
             [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "todo")]
-            HttpRequest request,
+            HttpRequest req,
             [Table("todos", Connection = "AzureWebJobsStorage")]
             IAsyncCollector<TodoTableEntity> todoTable,
+            [Queue("todos", Connection = "AzureWebJobsStorage")]
+            IAsyncCollector<Todo> todoQueue,
             ILogger log)
         {
             log.LogInformation("Creating a new todo list item");
-
-            string requestBody = await new StreamReader(request.Body).ReadToEndAsync();
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
             TodoCreateModel input = JsonConvert.DeserializeObject<TodoCreateModel>(requestBody);
 
-            Todo todo = new Todo
-            {
-                TaskDescription = input.TaskDescription
-            };
-
+            Todo todo = new Todo() {TaskDescription = input.TaskDescription};
             await todoTable.AddAsync(todo.ToTodoTableEntity());
+            await todoQueue.AddAsync(todo);
             return new OkObjectResult(todo);
         }
 
         [FunctionName("GetTodos")]
         public static async Task<IActionResult> GetTodos(
             [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "todo")]
-            HttpRequest request,
+            HttpRequest req,
             [Table("todos", Connection = "AzureWebJobsStorage")]
             CloudTable todoTable,
             ILogger log)
         {
-            log.LogInformation("Getting all todo list items");
+            log.LogInformation("Getting todo list items");
             TableQuery<TodoTableEntity> query = new TableQuery<TodoTableEntity>();
             TableQuerySegment<TodoTableEntity> segment = await todoTable.ExecuteQuerySegmentedAsync(query, null);
             return new OkObjectResult(segment.Select(Mappings.ToTodo));
         }
 
-
         [FunctionName("GetTodoById")]
         public static IActionResult GetTodoById(
             [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "todo/{id}")]
-            HttpRequest request,
+            HttpRequest req,
             [Table("todos", "TODO", "{id}", Connection = "AzureWebJobsStorage")]
-            TodoTableEntity todoTableEntity,
-            ILogger log,
-            string id)
+            TodoTableEntity todo,
+            ILogger log, string id)
         {
-            log.LogInformation($"Getting todo by Id. Id = {id}");
-            if (todoTableEntity == null)
+            log.LogInformation("Getting todo item by id");
+            if (todo == null)
             {
                 log.LogInformation($"Item {id} not found");
                 return new NotFoundResult();
             }
 
-            return new OkObjectResult(todoTableEntity.ToTodo());
+            return new OkObjectResult(todo.ToTodo());
         }
 
         [FunctionName("UpdateTodo")]
@@ -77,8 +73,7 @@ namespace ServerlessRestApi.TodoFunction.Functions
             HttpRequest req,
             [Table("todos", Connection = "AzureWebJobsStorage")]
             CloudTable todoTable,
-            ILogger log,
-            string id)
+            ILogger log, string id)
         {
             string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
             TodoUpdateModel updated = JsonConvert.DeserializeObject<TodoUpdateModel>(requestBody);
@@ -89,7 +84,7 @@ namespace ServerlessRestApi.TodoFunction.Functions
                 return new NotFoundResult();
             }
 
-            TodoTableEntity existingRow = (TodoTableEntity)findResult.Result;
+            TodoTableEntity existingRow = (TodoTableEntity) findResult.Result;
             existingRow.IsCompleted = updated.IsCompleted;
             if (!string.IsNullOrEmpty(updated.TaskDescription))
             {
@@ -107,17 +102,15 @@ namespace ServerlessRestApi.TodoFunction.Functions
             HttpRequest req,
             [Table("todos", Connection = "AzureWebJobsStorage")]
             CloudTable todoTable,
-            ILogger log,
-            string id)
+            ILogger log, string id)
         {
-            log.LogInformation($"Deleting todo by Id. Id = {id}");
             TableOperation deleteOperation = TableOperation.Delete(new TableEntity()
-            { PartitionKey = "TODO", RowKey = id, ETag = "*" });
+                {PartitionKey = "TODO", RowKey = id, ETag = "*"});
             try
             {
                 TableResult deleteResult = await todoTable.ExecuteAsync(deleteOperation);
             }
-            catch (Microsoft.Azure.Storage.StorageException e) when (e.RequestInformation.HttpStatusCode == 404)
+            catch (StorageException e) when (e.RequestInformation.HttpStatusCode == 404)
             {
                 return new NotFoundResult();
             }
