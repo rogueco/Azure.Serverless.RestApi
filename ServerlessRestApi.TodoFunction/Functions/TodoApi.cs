@@ -7,7 +7,7 @@ using Microsoft.Azure.Storage;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
-using Microsoft.WindowsAzure.Storage.Table;
+using Microsoft.Azure.Cosmos.Table;
 using Newtonsoft.Json;
 using ServerlessRestApi.TodoFunction.Entities;
 
@@ -89,7 +89,7 @@ namespace ServerlessRestApi.TodoFunction.Functions
                 return new NotFoundResult();
             }
 
-            TodoTableEntity existingRow = (TodoTableEntity) findResult.Result;
+            TodoTableEntity existingRow = (TodoTableEntity)findResult.Result;
             existingRow.IsCompleted = updated.IsCompleted;
             if (!string.IsNullOrEmpty(updated.TaskDescription))
             {
@@ -112,12 +112,12 @@ namespace ServerlessRestApi.TodoFunction.Functions
         {
             log.LogInformation($"Deleting todo by Id. Id = {id}");
             TableOperation deleteOperation = TableOperation.Delete(new TableEntity()
-                {PartitionKey = "TODO", RowKey = id, ETag = "*"});
+            { PartitionKey = "TODO", RowKey = id, ETag = "*" });
             try
             {
                 TableResult deleteResult = await todoTable.ExecuteAsync(deleteOperation);
             }
-            catch (StorageException e) when (e.RequestInformation.HttpStatusCode == 404)
+            catch (Microsoft.Azure.Storage.StorageException e) when (e.RequestInformation.HttpStatusCode == 404)
             {
                 return new NotFoundResult();
             }
